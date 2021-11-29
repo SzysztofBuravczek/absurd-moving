@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="flex-wrapper">
+      <div class="canvas-container">
+        <canvas id="canvas"></canvas>
+      </div>
+      <div class="commands" id="commands"></div>
+    </div>
+    <script>
+      const RAD2DEG = Math.PI / 180;
+      function sin(degree) {
+        //TODO: return +-0.5
+        switch (degree % 360) {
+          case -180:
+          case 0:
+          case 180:
+            return 0;
+          case -270:
+          case 90:
+            return 1;
+          case -90:
+          case 270:
+            return -1;
+          default:
+            return Math.sin(RAD2DEG * degree);
+        }
+      }
+      function cos(degree) {
+        //TODO: return +-0.5
+        switch (degree % 360) {
+          case 0:
+            return 1;
+          case -180:
+          case 180:
+            return -1;
+          case -270:
+          case -90:
+          case 90:
+          case 270:
+            return 0;
+          default:
+            return Math.cos(RAD2DEG * degree);
+        }
+      }
+      //   function tan(degree) {
+      //     return Math.tan(RAD2DEG * degree);
+      //   }
+
+      ////////////////////////////////////////
+      //             Classes                //
+      ////////////////////////////////////////
+
+      class PrimitiveList {
+        static DEBOUNCE_TIME = 500;
+        static #debounceTimers = {};
+
+        static #idCounter = 0;
+
+        #parentElement;
+        #formIdList = [];
+        #dataList = [];
+
+        constructor(parentId) {
+          this.#parentElement = document.getElementById(parentId);
+
+          this.#parentElement.addEventListener("click", (e) => {
+            if (e.target.tagName !== "BUTTON") {
+              return;
+            }
+
+            const form = e.target.closest("form");
+            const currentIndex = form
+              ? this.#formIdList.findIndex((id) => form.id === id)
+              : undefined;
+
+            this.onButtonClick(e.target, currentIndex, form);
+          });
+
+          this.#parentElement.addEventListener("input", (e) => {
+            const form = e.target.closest("form");
+            const timerName = `${form ? form.id : parentId}_${e.target.name}`;
+            if (PrimitiveList.#debounceTimers[timerName]) {
+              clearTimeout(PrimitiveList.#debounceTimers[timerName]);
+            }
+
+            PrimitiveList.#debounceTimers[timerName] = setTimeout(() => {
+              const currentIndex = form
+                ? this.#formIdList.findIndex((id) => form.id === id)
+                : undefined;
+
+              this.onFormInput(e.target, currentIndex, form);
+              this.onUpdate();
+
+              delete PrimitiveList.#debounceTimers[timerName];
+            }, PrimitiveList.DEBOUNCE_TIME);
+          });
+
+          this.#parentElement.addEventListener("submit", (e) => {
+            e.preventDefault();
+
+            const form = e.target;
+            const currentIndex = this.#formIdList.findIndex(
+              (id) => form.id === id
+            );
+
+            for (const [timerName, timerId] of Object.entries(
+              PrimitiveList.#debounceTimers
+            )) {
+              if (timerName.includes(form.id)) {
+                clearTimeout(timerId);
+                const elementName = timerName.slice(timerName.indexOf("_") + 1);
+                this.onFormInput(
+                  form.querySelector(`[name="${elementName}"]`),
+                  currentIndex,
+                  form
+                );
+              }
+            }
+            this.onFormSubmit(currentIndex, form);
+            this.onUpdate();
+          });
+        }
+
+        insertField(fieldObj = {}) {
+          fieldObj = this.transformObj(fieldObj);
+
+          const formId = `form${++PrimitiveList.#idCounter}`;
+          this.#formIdList.push(formId);
+          this.#dataList.push(fieldObj);
+
+          this.onUpdate();
+
+          this.#parentElement.insertAdjacentHTML(
+            "beforeend",
+            this.createFormHTML(formId, fieldObj)
+          );
+        }
+
+        insertFieldAt(index, fieldObj = {}) {
+          fieldObj = this.transformObj(fieldObj);
+
+          const formId = `form${++PrimitiveList.#idCounter}`;
+          this.#formIdList.splice(index, 0, formId);
+          this.#dataList.splice(index, 0, fieldObj);
+
+          this.onUpdate();
+
+          this.#parentElement.insertAdjacentHTML(
+            "beforeend",
+            this.createFormHTML(formId, fieldObj)
+          );
+          if (index + 1 < this.#formIdList.length) {
+            this.#parentElement.insertBefore(
+              document.getElementById(formId),
+              document.getElementById(this.#formIdList[index + 1])
+            );
+          }
+        }
+
+        shiftField(index, isUp) {
+          if (index < 0 || index >= this.#dataList.length) {
+            return false;
+          }
+          if (
+            (isUp && index === 0) ||
+            (!isUp && index === this.#dataList.length - 1)
+          ) {
+            return false;
+          }
+
+          let index1, index2;
+          if (isUp) {
+            index1 = index - 1;
+            index2 = index;
+          } else {
+            index1 = index;
+            index2 = index + 1;
+          }
+
+          this.#parentElement.insertBefore(
+            document.getElementById(this.#formIdList[index2]),
+            document.getElementById(this.#formIdList[index1])
+          );
+
+          let temp = this.#dataList[index1];
+          this.#dataList[index1] = this.#dataList[index2];
+          this.#dataList[index2] = temp;
+
+          temp = this.#formIdList[index1];
+          this.#formIdList[index1] = this.#formIdList[index2];
+          this.#formIdList[index2] = temp;
+
+          this.onUpdate();
+
+          return true;
+        }
+
+        deleteField(index) {
+          if (index < 0 || index >= this.#dataList.length) {
+            return false;
+          }
+
+          this.#parentElement.removeChild(
+            document.getElementById(this.#formIdList[index])
+          );
+
+          this.#dataList.splice(index, 1);
+          this.#formIdList.splice(index, 1);
+
+          this.onUpdate();
+
+          return true;
+        }
+
+        clear() {
+          this.#parentElement.innerHTML = "";
+          this.#dataList = [];
+          this.#formIdList = [];
+          this.onUpdate();
+        }
+
+        get data() {
+          return this.#dataList;
+        }
+
+        //Overload these in children:
+        createFormHTML(formId, fieldObj) {
+          return "";
+        }
+        onButtonClick(target, currentIndex, form) {}
+        onFormInput(target, currentIndex, form) {}
+        onFormSubmit(currentIndex, form) {}
+        onUpdate() {
+          updateData();
+        }
+        transformObj(fieldObj) {
+          return fieldObj;
+        }
+      }
+
+      class Drawer {
+        margin = 0;
+
+        #canvas;
+        #context;
+        constructor(canvas) {
+          this.#canvas = canvas;
+          this.#context = canvas.getContext("2d");
+        }
+
+        get canvas() {
+          return this.#canvas;
+        }
+
+        get context() {
+          return this.#context;
+        }
+
+        get width() {
+          return this.#canvas.width;
+        }
+
+        set width(newWidth) {
+          this.#canvas.width = newWidth;
+        }
+
+        get height() {
+          return this.#canvas.height;
+        }
+
+        set height(newHeight) {
+          this.#canvas.height = newHeight;
+        }
+
+        start(clear = true) {
+          if (clear) {
+            console.log(
+              "clearing rect",
+              this.#canvas.width,
+              this.#canvas.height
+            );
+            this.#context.clearRect(
+              0,
+              0,
+              this.#canvas.width,
+              this.#canvas.height
+            );
+          }
+        }
+        moveTo(x, y) {}
+        lineTo(x, y) {}
+        finish() {}
+      }
+
+      class LineDrawer extends Drawer {
+        #lineWidth;
+        constructor(canvas) {
+          super(canvas);
+        }
+
+        set lineWidth(width) {
+          this.context.lineWidth = width;
+          this.#lineWidth = width;
+        }
+
+        get lineWidth() {
+          return this.#lineWidth;
+        }
+
+        start(clear = true) {
+          super.start(clear);
+          this.context.lineWidth = this.#lineWidth;
+          this.context.beginPath();
+        }
+
+        moveTo(x, y) {
+          this.context.moveTo(x, y);
+        }
+
+        lineTo(x, y) {
+          this.context.lineTo(x, y);
+        }
+
+        finish() {
+          this.context.stroke();
+        }
+      }
+
+      class NestedDrawer extends Drawer {
+        #childCanvas;
+        #point1;
+        // #point2;
+
+        #currentX;
+        #currentY;
+        #coeffX;
+        #coeffY;
+
+        constructor(canvas, childCanvas = null, point1 = null, point2 = null) {
+          super(canvas);
+          if (childCanvas && point1 && point2) {
+            this.resetChild(childCanvas, point1, point2);
+          }
+        }
+
+        /*
+        get childCanvas() {
+          return this.#childCanvas;
+        }
+
+        get point1() {
+          return this.#point1;
+        }
+
+        get point2() {
+          return this.#point2;
+        }
+        */
+
+        resetChild(childCanvas, point1, point2) {
+          this.#childCanvas = childCanvas;
+          this.#point1 = point1;
+          // this.#point2 = point2;
+          const deltaX = point2.x - point1.x;
+          const deltaY = point2.y - point1.y;
+          const D2 = deltaX * deltaX + deltaY * deltaY;
+          this.#coeffX = deltaX / D2;
+          this.#coeffY = deltaY / D2;
+          console.log(point1, point2, D2);
+        }
+
+        start(clear = true) {
+          this.context.setTransform(1, 0, 0, 1, 0, 0);
+          super.start(clear);
+        }
+
+        moveTo(x, y) {
+          this.#currentX = x;
+          this.#currentY = y;
+        }
+
+        lineTo(x, y) {
+          //TODO: add distance divide support (see testMultiArrow.js)
+          this.#drawSingle(
+            this.#currentX,
+            this.#currentY,
+            x - this.#currentX,
+            y - this.#currentY
+          );
+          this.#currentX = x;
+          this.#currentY = y;
+        }
+
+        finish() {
+          this.context.setTransform(1, 0, 0, 1, 0, 0);
+          super.finish();
+        }
+
+        #drawSingle(x1, y1, deltaX, deltaY) {
+          const k_cos_a = this.#coeffX * deltaX + this.#coeffY * deltaY;
+          const k_sin_a = this.#coeffY * deltaX - this.#coeffX * deltaY;
+          this.context.setTransform(
+            k_cos_a,
+            -k_sin_a,
+            k_sin_a,
+            k_cos_a,
+            x1 - (k_cos_a * this.#point1.x + k_sin_a * this.#point1.y),
+            y1 - (-k_sin_a * this.#point1.x + k_cos_a * this.#point1.y)
+          );
+          this.context.drawImage(this.#childCanvas, 0, 0);
+        }
+      }
+      ////////////////////////////////////////
+
+      //   const ARG_DISTANCE = {
+      //     type: "int",
+      //     default: 1,
+      //   };
+      const ARG_ANGLE = {
+        type: "angle",
+        default: 0,
+      };
+      const FUNCTIONS = {
+        start: {},
+        drawForward: {
+          //   distance: ARG_DISTANCE,
+        },
+        moveForward: {
+          //   distance: ARG_DISTANCE,
+        },
+        rotateLeft: {
+          angle: ARG_ANGLE,
+        },
+        rotateRight: {
+          angle: ARG_ANGLE,
+        },
+        resetAngle: {},
+        drawBack: {
+          //   distance: ARG_DISTANCE,
+        },
+        moveBack: {
+          //   distance: ARG_DISTANCE,
+        },
+      };
+
+      const DEFAULT_ADD_FUNCTION = "rotateRight";
+
+      const FIELD_BUTTON_HTML = [
+        '<span class="button-row">',
+        '<button type="button" class="btn-add" name="btnAddBefore">+</button>',
+        '<button type="button" class="btn-add" name="btnAddAfter">+</button>',
+        "</span>",
+        '<span class="button-row">',
+        '<button type="button" class="btn-shift" name="btnMoveUp">&#9650;</button>',
+        '<button type="button" class="btn-shift" name="btnMoveDown">&#9660;</button>',
+        "</span>",
+        '<button type="button" class="btn-remove" name="btnRemove">&#8211;</button>',
+      ].join("");
+
+      // const CONTEXT = document.getElementById("canvas").getContext("2d");
+      const MAIN_DRAWER = new NestedDrawer(document.getElementById("canvas"));
+      //TODO: make it changeable
+      // MAIN_DRAWER.margin = 20;
+
+      // let autoRedraw = false;
+
+      let idCounter = 0;
+      let pointArray = [];
+      let movementArray = [];
+      let minX = 0;
+      let minY = 0;
+      let maxX = 0;
+      let maxY = 0;
+
+      const INIT_ANGLE = -90; //facing up
+
+      const commandList = new PrimitiveList("commands");
+
+      let interval = undefined;
+
+      if (!loadData()) {
+        commandList.insertField();
+      }
+      // autoRedraw = true;
+      // updateData();
+
+      function createFunctionlist(name, optArray, selected = "") {
+        let code = `<select name="${name}">`;
+        for (const opt of optArray) {
+          code += `<option value="${opt}" ${
+            opt === selected ? "selected" : ""
+          }>${opt}</option>`;
+        }
+        code += "</select>";
+
+        return code;
+      }
+
+      function createParameters(fieldObj) {
+        if (
+          typeof fieldObj !== "object" ||
+          !FUNCTIONS.hasOwnProperty(fieldObj?._function)
+        ) {
+          return "";
+        }
+        let code = "";
+        Object.entries(FUNCTIONS[fieldObj._function]).forEach(
+          ([paramName, paramOpts]) => {
+            code += `<label>${paramName}:<input name="${paramName}" ${inputSettings(
+              paramOpts.type
+            )} value="${
+              fieldObj.hasOwnProperty(paramName)
+                ? fieldObj[paramName]
+                : paramOpts.default
+            }"></label>`;
+          }
+        );
+
+        return code;
+      }
+
+      function initObj(fieldObj) {
+        let newObj;
+        switch (typeof fieldObj) {
+          case "object":
+            newObj = { ...fieldObj };
+            break;
+          case "string":
+            newObj = { _function: fieldObj };
+            break;
+          default:
+            newObj = {};
+        }
+
+        if (!newObj._function) {
+          newObj._function = Object.keys(FUNCTIONS)[0];
+        }
+        Object.entries(FUNCTIONS[newObj._function]).forEach(
+          ([paramName, paramOpts]) => {
+            if (!newObj.hasOwnProperty(paramName)) {
+              newObj[paramName] = paramOpts.default;
+            }
+          }
+        );
+
+        return newObj;
+      }
+
+      function inputSettings(type) {
+        switch (type) {
+          case "angle":
+            return 'type="number" min="0" max="360" step="any"';
+          case "number":
+            return 'type="number" step="any"';
+          case "int":
+            return 'type="number" step="1"';
+        }
+        return 'type="text"';
+      }
+
+      function convertParameter(type, value) {
+        switch (type) {
+          case "number":
+          case "angle":
+            return parseFloat(value);
+          case "int":
+            return parseInt(value);
+        }
+        return value;
+      }
+
+      function isValidParameter(type, value) {
+        switch (type) {
+          case "number":
+          case "angle":
+          case "int":
+            return !isNaN(value);
+        }
+        return true;
+      }
+
+      function updateData() {
+        // if (!autoRedraw) {
+        //   return;
+        // }
+        saveData();
+        buildArrays(commandList.data);
+
+        const protoCanvas = document.createElement("canvas");
+        //TODO: put to constants or better allow to choose:
+        const OVERSAMPLE = 2;
+        const LINEWIDTH = 2;
+
+        const coordStep = getCoordStep(MAIN_DRAWER);
+        let deltaX = maxX - minX;
+        let deltaY = maxY - minY;
+        let baseWidth, baseHeight;
+        if (deltaX > deltaY) {
+          baseWidth = coordStep;
+          baseHeight = (coordStep / deltaX) * deltaY;
+        } else {
+          baseWidth = (coordStep / deltaY) * deltaX;
+          baseHeight = coordStep;
+        }
+
+        protoCanvas.width = OVERSAMPLE * baseWidth + 2 * LINEWIDTH;
+        protoCanvas.height = OVERSAMPLE * baseHeight + 2 * LINEWIDTH;
+
+        const lineDrawer = new LineDrawer(protoCanvas);
+        lineDrawer.lineWidth = LINEWIDTH;
+        lineDrawer.margin = LINEWIDTH;
+        drawLines(lineDrawer);
+        console.log("Prototype drawn", lineDrawer.width, lineDrawer.height);
+
+        //TODO: allow to choose the points and the offsets
+        const OFFSET = 0;
+        MAIN_DRAWER.resetChild(
+          protoCanvas,
+          {
+            x: LINEWIDTH - OFFSET,
+            y: lineDrawer.height / 2,
+          },
+          {
+            x: lineDrawer.width - LINEWIDTH + OFFSET,
+            y: lineDrawer.height / 2,
+          }
+        );
+
+        drawLines(MAIN_DRAWER);
+        console.log("Big one drawed");
+
+        protoCanvas.remove();
+      }
+
+      function buildArrays(commandArray) {
+        let i, x, y, angle;
+        pointArray = [];
+        movementArray = [];
+        minX = 0;
+        minY = 0;
+        maxX = 0;
+        maxY = 0;
+        if (commandArray[0]?._function !== "start") {
+          initPoint();
+        }
+        commandArray.forEach((command) => {
+          switch (command._function) {
+            case "start":
+              initPoint();
+              break;
+
+            case "drawForward":
+              moveForward();
+              addPoint(true);
+              break;
+
+            case "moveForward":
+              moveForward();
+              addPoint(false);
+              break;
+
+            case "rotateLeft":
+              if (command.angle) {
+                angle -= command.angle;
+              }
+              break;
+
+            case "rotateRight":
+              if (command.angle) {
+                angle += command.angle;
+              }
+              break;
+
+            case "resetAngle":
+              angle = INIT_ANGLE;
+              break;
+
+            case "drawBack":
+              if (findPoint(true)) {
+                moveBack();
+              }
+              break;
+
+            case "moveBack":
+              if (findPoint(false)) {
+                moveBack();
+              }
+              break;
+          }
+        });
+
+        function initPoint() {
+          x = 0;
+          y = 0;
+          angle = INIT_ANGLE;
+          if (pointArray.length) {
+            moveTo(0, false);
+          } else {
+            addPoint(false);
+          }
+        }
+
+        function moveForward() {
+          x += cos(angle);
+          y += sin(angle);
+
+          if (x < minX) {
+            minX = x;
+          }
+          if (y < minY) {
+            minY = y;
+          }
+          if (x > maxX) {
+            maxX = x;
+          }
+          if (y > maxY) {
+            maxY = y;
+          }
+        }
+
+        function addPoint(draw) {
+          pointArray.push({ x: x, y: y });
+          moveTo(pointArray.length - 1, draw);
+        }
+
+        function findPoint(draw) {
+          const firstTime = movementArray.findIndex(
+            (movement) => movement.i === i
+          );
+          if (firstTime < 1) {
+            return false;
+          }
+          moveTo(movementArray[firstTime - 1].i, draw);
+
+          return true;
+        }
+
+        function moveBack() {
+          x = pointArray[i].x;
+          y = pointArray[i].y;
+        }
+
+        function moveTo(index, draw) {
+          i = index;
+          movementArray.push({ i: i, draw: draw });
+        }
+      }
+
+      function getCoordStep(drawer) {
+        return Math.min(
+          (drawer.width - 2 * drawer.margin) / (maxX - minX),
+          (drawer.height - 2 * drawer.margin) / (maxY - minY)
+        );
+      }
+
+      function drawLines(drawer) {
+        const coordStep = getCoordStep(drawer);
+        drawer.start();
+        movementArray.forEach((movement) => {
+          const point = pointArray[movement.i];
+          const x = drawer.margin + (point.x - minX) * coordStep;
+          const y = drawer.margin + (point.y - minY) * coordStep;
+          if (movement.draw) {
+            drawer.lineTo(x, y);
+          } else {
+            drawer.moveTo(x, y);
+          }
+        });
+        drawer.finish();
+      }
+
+      function loadData() {
+        if (interval) {
+          clearInterval(interval);
+        }
+        try {
+          const data =
+            //JSON.parse(localStorage.getItem("data"));
+            [
+              { _function: "start" },
+              { _function: "rotateRight", angle: 30 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "drawForward", angle: 0 },
+              { _function: "rotateRight", angle: 120 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 120 },
+              { _function: "drawForward" },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward" },
+              { _function: "moveBack", angle: 0 },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "rotateLeft", angle: 120 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "resetAngle", angle: 180 },
+              { _function: "drawForward" },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 90 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "moveBack", angle: 0 },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "rotateRight", angle: 30 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 120 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "moveBack", angle: 0 },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "resetAngle", angle: 90 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 30 },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 30 },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 30 },
+              { _function: "drawForward" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "rotateRight", angle: 60 },
+              { _function: "drawForward" },
+              { _function: "rotateLeft", angle: 30 },
+              { _function: "drawForward" },
+              { _function: "rotateLeft", angle: 30 },
+              { _function: "drawForward" },
+              { _function: "rotateLeft", angle: 60 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "rotateLeft", angle: 60 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 30 },
+              { _function: "drawForward" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "rotateRight", angle: 30 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "moveBack" },
+              { _function: "rotateRight", angle: 150 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "rotateLeft", angle: 120 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "rotateLeft", angle: 120 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "rotateLeft", angle: 120 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 60 },
+              { _function: "drawForward" },
+              { _function: "rotateLeft", angle: 60 },
+              { _function: "drawForward" },
+              { _function: "moveBack" },
+              { _function: "moveBack", angle: 180 },
+              { _function: "rotateLeft", angle: 90 },
+              { _function: "drawForward" },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 30 },
+              { _function: "drawForward" },
+              { _function: "rotateRight", angle: 60 },
+              { _function: "drawForward" },
+              { _function: "moveBack" },
+              { _function: "moveBack" },
+              { _function: "resetAngle" },
+              { _function: "drawForward" },
+              { _function: "drawForward", angle: 0 },
+              { _function: "rotateLeft", angle: 30 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "rotateLeft", angle: 120 },
+              { _function: "drawForward", angle: 0 },
+              { _function: "drawForward", angle: 0 },
+            ];
+          let i = 0;
+          interval = setInterval(() => {
+            if (i >= data.length) {
+              clearInterval(interval);
+              interval = undefined;
+              return;
+            }
+            commandList.insertField(data[i]);
+            i++;
+          }, 1000 / 15);
+
+          return true;
+        } catch (err) {
+          return false;
+        }
+      }
+
+      function saveData() {
+        //localStorage.setItem("data", JSON.stringify(commandList.data));
+      }
+
+      const HTML = document.querySelector("html");
+
+      function resizeCanvas() {
+        // MAIN_DRAWER.canvas.width = window.innerWidth * 0.95;
+        // MAIN_DRAWER.canvas.height = window.innerHeight * 0.95;
+        MAIN_DRAWER.canvas.width = HTML.clientWidth * 0.95;
+        MAIN_DRAWER.canvas.height = HTML.clientHeight * 0.95;
+        MAIN_DRAWER.margin = MAIN_DRAWER.canvas.width / 50;
+        updateData();
+      }
+
+      resizeCanvas();
+
+      window.addEventListener("resize", resizeCanvas);
+
+      MAIN_DRAWER.canvas.addEventListener("click", () => {
+        pointArray = [];
+        movementArray = [];
+        commandList.clear();
+
+        loadData();
+      });
+    </script>
+  </body>
+</html>
